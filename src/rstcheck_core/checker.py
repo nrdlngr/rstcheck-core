@@ -70,7 +70,7 @@ def check_file(
 
     _docutils.clean_docutils_directives_and_roles_cache()
 
-    with _sphinx.load_sphinx_if_available():
+    with _sphinx.load_sphinx_if_available(source_file):
         return list(
             check_source(
                 source,
@@ -214,7 +214,27 @@ def check_source(
     _docutils.ignore_directives_and_roles(ignores["directives"] or [], ignores["roles"] or [])
 
     if _extras.SPHINX_INSTALLED:
-        _sphinx.load_sphinx_ignores()
+        # Pass source_file to load_sphinx_ignores if it's a Path
+        source_file_path = None
+        if isinstance(source_file, pathlib.Path):
+            source_file_path = source_file
+        _sphinx.load_sphinx_ignores(source_file_path)
+        
+        # Handle substitutions from conf.py if source_file is a Path
+        if source_file_path is not None:
+            conf_dir = _sphinx.find_conf_py(source_file_path)
+            if conf_dir:
+                _, _, custom_substitutions = _sphinx.extract_from_conf_py(conf_dir)
+                if custom_substitutions:
+                    logger.debug(
+                        "Adding %s substitutions from conf.py", len(custom_substitutions)
+                    )
+                    # Add substitutions to the ignore list
+                    ignores["substitutions"].extend(custom_substitutions)
+                    
+                    # Replace substitutions with dummy values in the source
+                    for substitution in custom_substitutions:
+                        source = source.replace(f"|{substitution}|", f"x{substitution}x")
 
     writer = _CheckWriter(source, source_origin, ignores, report_level)
 
