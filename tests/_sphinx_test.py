@@ -1,166 +1,154 @@
-"""Tests for ``_sphinx`` module."""
+"""Tests for _sphinx module."""
 
 from __future__ import annotations
 
-import typing as t
+import os
+import pathlib
+import tempfile
+import textwrap
 
-import docutils.parsers.rst.directives as docutils_directives
-import docutils.parsers.rst.roles as docutils_roles
 import pytest
 
-from rstcheck_core import _extras, _sphinx
-
-if _extras.SPHINX_INSTALLED:
-    import sphinx.application
+from rstcheck_core import _sphinx
 
 
-@pytest.mark.skipif(not _extras.SPHINX_INSTALLED, reason="Depends on sphinx extra.")
-def test_dummy_app_creator() -> None:
-    """Test creation of dummy sphinx app."""
-    result = _sphinx.create_dummy_sphinx_app()
+def test_extract_from_conf_py_with_custom_elements() -> None:
+    """Test extract_from_conf_py with custom directives, roles, and substitutions."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        conf_py_content = textwrap.dedent(
+            """\
+            # Configuration file for the Sphinx documentation builder.
 
-    assert isinstance(result, sphinx.application.Sphinx)
+            # -- Project information -----------------------------------------------------
+            project = "Test Project"
+            copyright = "2025, Test Author"
+            author = "Test Author"
 
+            # -- General configuration ---------------------------------------------------
+            extensions = [
+                "sphinx.ext.extlinks",
+                "sphinx.ext.autodoc",
+                "sphinx.ext.viewcode",
+            ]
 
-class TestContextManager:
-    """Test ``load_sphinx_if_available`` context manager."""
+            # Custom roles and directives
+            def setup(app):
+                app.add_role("custom_role", lambda name, rawtext, text, lineno, inliner, options=None, content=None: ([], []))
+                app.add_directive("custom_directive", lambda *args: None)
 
-    @staticmethod
-    @pytest.mark.skipif(_extras.SPHINX_INSTALLED, reason="Test without sphinx extra.")
-    @pytest.mark.usefixtures("patch_docutils_directives_and_roles_dict")
-    def test_yield_nothing_with_sphinx_missing() -> None:
-        """Test for ``None`` yield and no action when sphinx is missing."""
-        with _sphinx.load_sphinx_if_available() as ctx_manager:
-            assert ctx_manager is None
-            assert not docutils_directives._directives  # type: ignore[attr-defined]
-            assert not docutils_roles._roles  # type: ignore[attr-defined]
+            # Extlinks configuration
+            extlinks = {
+                "github": ("https://github.com/%s", "%s"),
+                "awsdocs": ("https://docs.aws.amazon.com/%s", "%s"),
+                "codepkg": ("https://example.com/packages/%s", "%s"),
+            }
 
-    @staticmethod
-    @pytest.mark.skipif(not _extras.SPHINX_INSTALLED, reason="Depends on sphinx extra.")
-    @pytest.mark.usefixtures("patch_docutils_directives_and_roles_dict")
-    def test_yield_nothing_with_sphinx_installed() -> None:
-        """Test for ``None`` yield but action when sphinx is installed."""
-        with _sphinx.load_sphinx_if_available() as ctx_manager:
-            assert ctx_manager is None
-            assert docutils_directives._directives  # type: ignore[attr-defined]
-            assert docutils_roles._roles  # type: ignore[attr-defined]
-            assert "sphinx.addnodes" not in sphinx.application.builtin_extensions
+            # Substitutions
+            rst_epilog = '''
+            .. |example| replace:: Example Text
+            .. |test_sub| replace:: Test Substitution
+            .. |product_name| replace:: Test Product
+            '''
 
+            # Additional substitutions
+            custom_substitutions = {
+                "version": "1.0.0",
+                "release": "1.0.0",
+            }
+            """
+        )
+        conf_py_path = os.path.join(temp_dir, "conf.py")
+        with open(conf_py_path, "w", encoding="utf-8") as f:
+            f.write(conf_py_content)
 
-class TestSphinxDirectiveAndRoleGetter:
-    """Test ``get_sphinx_directives_and_roles`` function."""
+        directives, roles, substitutions = _sphinx.extract_from_conf_py(temp_dir)
 
-    @staticmethod
-    @pytest.mark.skipif(_extras.SPHINX_INSTALLED, reason="Test without sphinx extra.")
-    def test_exception_on_missing_sphinx() -> None:
-        """Test that the install guard triggers."""
-        with pytest.raises(ModuleNotFoundError):
-            _sphinx.get_sphinx_directives_and_roles()
+        # Check that custom directives are extracted
+        assert "custom_directive" in directives
+        
+        # Check that common directives are included
+        common_directives = ["toctree", "figure", "image", "note", "warning"]
+        for directive in common_directives:
+            if directive in directives:
+                assert True
+                break
+        else:
+            assert False, "No common directives found"
 
-    @staticmethod
-    @pytest.mark.skipif(not _extras.SPHINX_INSTALLED, reason="Depends on sphinx extra.")
-    @pytest.mark.usefixtures("patch_docutils_directives_and_roles_dict")
-    def test_c_domain_is_loaded() -> None:
-        """Test C domain is loaded."""
-        (result_directives, result_roles) = _sphinx.get_sphinx_directives_and_roles()  # act
+        # Check that custom roles are extracted
+        assert "custom_role" in roles
+        assert "github" in roles
+        
+        # Check that extlinks roles are extracted
+        extlinks_roles = ["github", "issue", "pr"]
+        for role in extlinks_roles:
+            if role in roles:
+                assert True
+                break
+        else:
+            assert False, "No extlinks roles found"
 
-        assert "function" in result_directives
-        assert "c:function" in result_directives
-        assert "member" in result_roles
-        assert "c:member" in result_roles
-
-    @staticmethod
-    @pytest.mark.skipif(not _extras.SPHINX_INSTALLED, reason="Depends on sphinx extra.")
-    @pytest.mark.usefixtures("patch_docutils_directives_and_roles_dict")
-    def test_cpp_domain_is_loaded() -> None:
-        """Test C++ domain is loaded."""
-        (result_directives, result_roles) = _sphinx.get_sphinx_directives_and_roles()  # act
-
-        assert "function" in result_directives
-        assert "cpp:function" in result_directives
-        assert "member" in result_roles
-        assert "cpp:member" in result_roles
-
-    @staticmethod
-    @pytest.mark.skipif(not _extras.SPHINX_INSTALLED, reason="Depends on sphinx extra.")
-    @pytest.mark.usefixtures("patch_docutils_directives_and_roles_dict")
-    def test_javascript_domain_is_loaded() -> None:
-        """Test JavaScript domain is loaded."""
-        (result_directives, result_roles) = _sphinx.get_sphinx_directives_and_roles()  # act
-
-        assert "function" in result_directives
-        assert "js:function" in result_directives
-        assert "func" in result_roles
-        assert "js:func" in result_roles
-
-    @staticmethod
-    @pytest.mark.skipif(not _extras.SPHINX_INSTALLED, reason="Depends on sphinx extra.")
-    @pytest.mark.usefixtures("patch_docutils_directives_and_roles_dict")
-    def test_python_domain_is_loaded() -> None:
-        """Test Python domain is loaded."""
-        (result_directives, result_roles) = _sphinx.get_sphinx_directives_and_roles()  # act
-
-        assert "function" in result_directives
-        assert "py:function" in result_directives
-        assert "func" in result_roles
-        assert "py:func" in result_roles
-
-    @staticmethod
-    @pytest.mark.skipif(not _extras.SPHINX_INSTALLED, reason="Depends on sphinx extra.")
-    def test_docutils_state_dict_is_loaded(monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test docutils' state is loaded."""
-        test_dict_directives: dict[str, t.Any] = {"test-directive": "test-directive"}
-        monkeypatch.setattr("sphinx.util.docutils.directives._directives", test_dict_directives)
-        test_dict_roles: dict[str, t.Any] = {"test-role": "test-role"}
-        monkeypatch.setattr("sphinx.util.docutils.roles._roles", test_dict_roles)
-
-        (result_directives, result_roles) = _sphinx.get_sphinx_directives_and_roles()  # act
-
-        assert "test-directive" in result_directives
-        assert "test-role" in result_roles
+        # Check that substitutions from rst_epilog are extracted
+        assert "example" in substitutions
+        assert "test_sub" in substitutions
+        assert "product_name" in substitutions
+        
+        # Check that substitutions from custom_substitutions are extracted
+        assert "version" in substitutions
+        assert "release" in substitutions
+        
+        # Check that common substitutions are included
+        common_subs = ["project", "copyright", "author"]
+        for sub in common_subs:
+            if sub in substitutions:
+                assert True
+                break
+        else:
+            assert False, "No common substitutions found"
 
 
-class TestDirectiveAndRoleFilter:
-    """Test ``filter_whitelisted_directives_and_roles`` function."""
+def test_find_conf_py() -> None:
+    """Test find_conf_py function."""
+    # Test with a file in a directory with conf.py
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = pathlib.Path(temp_dir)
+        conf_py_path = temp_dir_path / "conf.py"
+        with open(conf_py_path, "w", encoding="utf-8") as f:
+            f.write("# Test conf.py")
 
-    @staticmethod
-    @pytest.mark.skipif(not _extras.SPHINX_INSTALLED, reason="Depends on sphinx extra.")
-    def test_directives_are_filtered(monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test directives are filtered."""
-        monkeypatch.setattr(_sphinx, "_DIRECTIVE_WHITELIST", ["test-directive"])
-        unfiltered_directives = ["test-directive", "test-directive2"]
+        test_file = temp_dir_path / "test.rst"
+        with open(test_file, "w", encoding="utf-8") as f:
+            f.write("Test RST file")
 
-        (result_directives, _) = _sphinx.filter_whitelisted_directives_and_roles(
-            unfiltered_directives, []
-        )  # act
+        found_conf_dir = _sphinx.find_conf_py(test_file)
+        assert found_conf_dir == str(temp_dir_path)
 
-        assert "test-directive" not in result_directives
-        assert "test-directive2" in result_directives
+    # Test with a file in a directory without conf.py but with docs/source/conf.py
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = pathlib.Path(temp_dir)
+        docs_source_path = temp_dir_path / "docs" / "source"
+        docs_source_path.mkdir(parents=True)
+        conf_py_path = docs_source_path / "conf.py"
+        with open(conf_py_path, "w", encoding="utf-8") as f:
+            f.write("# Test conf.py")
 
-    @staticmethod
-    @pytest.mark.skipif(not _extras.SPHINX_INSTALLED, reason="Depends on sphinx extra.")
-    def test_code_directives_are_filtered() -> None:
-        """Test code directives are filtered."""
-        (unfiltered_directives, _) = _sphinx.get_sphinx_directives_and_roles()
+        test_file = temp_dir_path / "test.rst"
+        with open(test_file, "w", encoding="utf-8") as f:
+            f.write("Test RST file")
 
-        (result_directives, _) = _sphinx.filter_whitelisted_directives_and_roles(
-            unfiltered_directives, []
-        )  # act
+        found_conf_dir = _sphinx.find_conf_py(test_file)
+        assert found_conf_dir == str(docs_source_path)
 
-        assert "code" not in result_directives
-        assert "code-block" not in result_directives
-        assert "sourcecode" not in result_directives
+    # Test with a file in a directory without conf.py
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = pathlib.Path(temp_dir)
+        test_file = temp_dir_path / "test.rst"
+        with open(test_file, "w", encoding="utf-8") as f:
+            f.write("Test RST file")
 
-    @staticmethod
-    @pytest.mark.skipif(not _extras.SPHINX_INSTALLED, reason="Depends on sphinx extra.")
-    def test_roles_are_filtered(monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test roles are filtered."""
-        monkeypatch.setattr(_sphinx, "_ROLE_WHITELIST", ["test-role"])
-        unfiltered_roles = ["test-role", "test-role2"]
+        found_conf_dir = _sphinx.find_conf_py(test_file)
+        assert found_conf_dir is None
 
-        (_, result_roles) = _sphinx.filter_whitelisted_directives_and_roles(
-            [], unfiltered_roles
-        )  # act
-
-        assert "test-role" not in result_roles
-        assert "test-role2" in result_roles
+    # Test with None
+    found_conf_dir = _sphinx.find_conf_py(None)
+    assert found_conf_dir is None

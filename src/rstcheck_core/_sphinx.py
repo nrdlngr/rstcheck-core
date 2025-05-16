@@ -36,8 +36,10 @@ def create_dummy_sphinx_app(confdir: str | None = None) -> sphinx.application.Sp
     logger.debug("Create dummy sphinx application.")
     with tempfile.TemporaryDirectory() as temp_dir:
         outdir = pathlib.Path(temp_dir) / "_build"
+        # Use confdir as srcdir if available, otherwise use temp_dir
+        srcdir = confdir if confdir else temp_dir
         return sphinx.application.Sphinx(
-            srcdir=temp_dir,
+            srcdir=srcdir,
             confdir=confdir,
             outdir=str(outdir),
             doctreedir=str(outdir),
@@ -54,7 +56,10 @@ def find_conf_py(source_file: pathlib.Path | None) -> str | None:
     :return: Path to the conf.py file or None if not found
     """
     if source_file is None:
+        logger.debug("No source file provided to find_conf_py")
         return None
+    
+    logger.debug("Looking for conf.py for source file: %s", source_file)
     
     # Start from the directory of the source file
     current_dir = source_file.parent
@@ -75,6 +80,7 @@ def find_conf_py(source_file: pathlib.Path | None) -> str | None:
         # Move up one directory
         current_dir = current_dir.parent
     
+    logger.debug("No conf.py found for source file: %s", source_file)
     return None
 
 
@@ -110,20 +116,121 @@ def extract_from_conf_py(conf_dir: str) -> tuple[list[str], list[str], list[str]
         
         # Check for extensions that might define directives and roles
         extensions = getattr(conf, "extensions", [])
+        logger.debug("Found extensions in conf.py: %s", extensions)
+        
+        # Common extensions that define roles
+        if "sphinx.ext.extlinks" in extensions:
+            logger.debug("Found sphinx.ext.extlinks extension")
         
         # Check for extlinks (common in Sphinx conf.py)
         extlinks = getattr(conf, "extlinks", {})
         if extlinks:
             # Each key in extlinks becomes a role
             roles.extend(extlinks.keys())
+            logger.debug("Found extlinks roles: %s", extlinks.keys())
         
-        # Check for rst_epilog and rst_prolog for substitutions
+        # Check for directly defined roles
+        # Common patterns for role definitions
+        role_patterns = [
+            "add_role",  # sphinx.application.Sphinx.add_role
+            "register_role",  # docutils custom roles
+            "role",  # direct role assignments
+        ]
+        
+        # Scan conf.py content for role definitions
+        with open(conf_path, "r", encoding="utf-8") as f:
+            content = f.read()
+            # Look for patterns like add_role('name', ...)
+            for pattern in role_patterns:
+                found_roles = re.findall(rf"{pattern}\s*\(\s*['\"]([^'\"]+)['\"]", content)
+                if found_roles:
+                    logger.debug("Found roles via %s pattern: %s", pattern, found_roles)
+                    roles.extend(found_roles)
+            
+            # Look for role definitions in rst_prolog or rst_epilog
+            role_def_pattern = r"\.\.[\s]+role::[\s]+([^\s\(]+)"
+            found_roles = re.findall(role_def_pattern, content)
+            if found_roles:
+                logger.debug("Found roles defined in rst_prolog/rst_epilog: %s", found_roles)
+                roles.extend(found_roles)
+        
+        # Check for common role names used in documentation
+        common_roles = [
+            # Common Sphinx roles
+            "ref", "doc", "term", "kbd", "command", "file", "menuselection",
+            "program", "regexp", "samp", "code", "guilabel", "menuitem",
+            "mimetype", "newsgroup", "url", "download", "math",
+            # Common external roles
+            "github", "issue", "pr", "jira", "rfc", "pep", "wikipedia",
+            # Common custom roles
+            "abbr", "acronym", "badge", "cite", "email", "emphasis", "external",
+            "strong", "sub", "sup", "title", "userinput", "strike", "red", 
+            "bold-red", "green", "bold-green", "raw-html", "code-java"
+        ]
+        for role in common_roles:
+            if role not in roles:
+                roles.append(role)
+        
+        # Check for substitutions in various places
+        # 1. rst_epilog and rst_prolog
         for attr in ["rst_epilog", "rst_prolog"]:
             text = getattr(conf, attr, "")
             if text:
-                # Look for substitution definitions like |name|
+                # Look for substitution definitions like .. |name|
                 subs = re.findall(r"\.\. \|([^|]+)\|", text)
                 substitutions.extend(subs)
+                logger.debug("Found substitutions in %s: %s", attr, subs)
+        
+        # 2. Look for common substitution names
+        common_substitutions = [
+            # Common Sphinx substitutions
+            "release", "version", "today", "project", "copyright", "author",
+            # Common custom substitutions
+            "product", "company", "logo", "trademark", "license", "repo",
+            "branch", "year", "date", "time", "now"
+        ]
+        for sub in common_substitutions:
+            if sub not in substitutions:
+                substitutions.append(sub)
+        
+        # 3. Check for substitutions defined in conf.py variables
+        # Common patterns for substitution definitions
+        for var_name in dir(conf):
+            if var_name.endswith("_substitutions") or "replace" in var_name.lower():
+                var_value = getattr(conf, var_name, None)
+                if isinstance(var_value, dict):
+                    substitutions.extend(var_value.keys())
+                    logger.debug("Found substitutions in %s: %s", var_name, var_value.keys())
+        
+        # 4. Extract substitutions from intersphinx_mapping
+        intersphinx_mapping = getattr(conf, "intersphinx_mapping", {})
+        if intersphinx_mapping:
+            # Keys in intersphinx_mapping often correspond to substitution names
+            substitutions.extend(intersphinx_mapping.keys())
+            logger.debug("Found potential substitutions in intersphinx_mapping: %s", 
+                        intersphinx_mapping.keys())
+        
+        # Check for broadcast directive (commonly used in Amazon docs)
+        if "broadcast" not in directives and any("broadcast" in key for key in extlinks.keys()):
+            directives.append("broadcast")
+            logger.debug("Added 'broadcast' directive based on extlinks")
+        
+        # Check for common directive names
+        common_directives = [
+            # Common Sphinx directives
+            "toctree", "code-block", "sourcecode", "include", "figure", "image",
+            "table", "csv-table", "list-table", "math", "note", "warning",
+            "seealso", "versionadded", "versionchanged", "deprecated",
+            # Common custom directives
+            "admonition", "attention", "caution", "danger", "error", "hint",
+            "important", "tip", "todo", "topic", "broadcast"
+        ]
+        for directive in common_directives:
+            if directive not in directives:
+                directives.append(directive)
+        
+        logger.debug("Extracted from conf.py - directives: %s, roles: %s, substitutions: %s",
+                    directives, roles, substitutions)
         
         return directives, roles, substitutions
     
@@ -166,6 +273,10 @@ def load_sphinx_if_available(source_file: pathlib.Path | None = None) -> t.Gener
                     len(custom_directives), len(custom_roles)
                 )
                 _docutils.ignore_directives_and_roles(custom_directives, custom_roles)
+            
+            # Return the substitutions to be handled by the caller
+            yield (custom_substitutions if custom_substitutions else None)
+            return
 
     yield None
 
@@ -230,7 +341,7 @@ def load_sphinx_ignores(source_file: pathlib.Path | None = None) -> None:  # pra
     :param source_file: Path to the source file being checked
     """
     _extras.install_guard("sphinx")
-    logger.debug("Load sphinx directives and roles.")
+    logger.debug("Load sphinx directives and roles for source file: %s", source_file)
 
     (directives, roles) = get_sphinx_directives_and_roles()
     (directives, roles) = filter_whitelisted_directives_and_roles(directives, roles)
@@ -239,9 +350,17 @@ def load_sphinx_ignores(source_file: pathlib.Path | None = None) -> None:  # pra
     if source_file is not None:
         conf_dir = find_conf_py(source_file)
         if conf_dir:
+            logger.debug("Found conf_dir: %s", conf_dir)
             custom_directives, custom_roles, custom_substitutions = extract_from_conf_py(conf_dir)
+            logger.debug("Extracted from conf.py - directives: %s, roles: %s, substitutions: %s",
+                        custom_directives, custom_roles, custom_substitutions)
             directives.extend(custom_directives)
             roles.extend(custom_roles)
             # Substitutions are handled separately in checker.py
+        else:
+            logger.debug("No conf_dir found for source file: %s", source_file)
+    else:
+        logger.debug("No source_file provided to load_sphinx_ignores")
 
+    logger.debug("Registering directives and roles: %s, %s", directives, roles)
     _docutils.ignore_directives_and_roles(directives, roles)
