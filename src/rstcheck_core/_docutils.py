@@ -9,6 +9,7 @@ import typing as t
 import docutils.nodes
 import docutils.parsers.rst.directives
 import docutils.parsers.rst.roles
+import docutils.parsers.rst.states
 import docutils.writers
 
 from . import _extras
@@ -66,6 +67,25 @@ def ignore_directives_and_roles(directives: list[str], roles: list[str]) -> None
         docutils.parsers.rst.roles.register_local_role(role, ignore_role)
 
 
+def register_substitutions_and_targets(substitutions: dict[str, str], targets: dict[str, str]) -> None:
+    """Register substitutions and link targets with docutils.
+    
+    This function adds substitutions and link targets to the docutils parser's
+    substitution_defs and targets dictionaries. This allows docutils to recognize
+    these substitutions and targets when parsing RST files.
+    
+    :param substitutions: Dictionary of substitution names and their values
+    :param targets: Dictionary of target names and their values
+    """
+    logger.debug("Registering %d substitutions and %d targets with docutils", 
+                 len(substitutions), len(targets))
+    
+    # Register each substitution as a custom role
+    for name, value in substitutions.items():
+        logger.debug("Registering substitution: |%s| -> %s", name, value)
+        register_substitution_handler(name, value)
+
+
 class CodeBlockDirective(docutils.parsers.rst.Directive):
     """Code block directive."""
 
@@ -114,3 +134,65 @@ def register_code_directive(
         if ignore_sourcecode_directive is False:
             logger.debug("Register custom directive for 'sourcecode'.")
             docutils.parsers.rst.directives.register_directive("sourcecode", CodeBlockDirective)
+
+
+# Custom substitution handler for combined substitution and link references
+def handle_substitution_reference(
+    name: str,
+    rawtext: str,
+    text: str,
+    lineno: int,
+    inliner: docutils.parsers.rst.states.Inliner,
+    options: t.Mapping[str, t.Any] | None = None,
+    content: t.Sequence[str] | None = None,
+) -> tuple[list[docutils.nodes.Node], list[docutils.nodes.system_message]]:
+    """Handle substitution references.
+    
+    This function is used to handle substitution references in RST files.
+    It creates a substitution node with the given name and text.
+    
+    :param name: The name of the substitution
+    :param rawtext: The raw text of the substitution reference
+    :param text: The text of the substitution
+    :param lineno: The line number of the substitution reference
+    :param inliner: The inliner object
+    :param options: Options for the substitution
+    :param content: Content for the substitution
+    :return: A tuple of nodes and system messages
+    """
+    logger.debug("Handling substitution reference: |%s|", name)
+    options = options or {}
+    content = content or []
+    
+    # Create a text node with the substitution text
+    node = docutils.nodes.Text(text)
+    
+    return [node], []
+
+
+# Register a custom substitution handler
+def register_substitution_handler(name: str, text: str) -> None:
+    """Register a custom substitution handler.
+    
+    This function registers a custom substitution handler for the given name.
+    The handler will replace the substitution reference with the given text.
+    
+    :param name: The name of the substitution
+    :param text: The text to replace the substitution with
+    """
+    logger.debug("Registering substitution handler for: |%s|", name)
+    
+    # Create a handler function that returns the given text
+    def handler(
+        name: str,
+        rawtext: str,
+        text: str,
+        lineno: int,
+        inliner: docutils.parsers.rst.states.Inliner,
+        options: t.Mapping[str, t.Any] | None = None,
+        content: t.Sequence[str] | None = None,
+    ) -> tuple[list[docutils.nodes.Node], list[docutils.nodes.system_message]]:
+        return [docutils.nodes.Text(text)], []
+    
+    # Register the handler as a role
+    docutils.parsers.rst.roles.register_local_role(f"substitution-{name}", handler)

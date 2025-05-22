@@ -37,6 +37,7 @@ def find_sphinx_confdir(source_file_dir: pathlib.Path) -> pathlib.Path | None:
             return current_dir
         current_dir = current_dir.parent
     
+    logger.debug("No conf.py found in directory tree starting from %s", source_file_dir)
     return None
 
 
@@ -46,10 +47,10 @@ def create_dummy_sphinx_app(confdir: pathlib.Path | None = None) -> sphinx.appli
     :param confdir: Path to directory containing conf.py file; defaults to :py:obj:`None`
     :return: Sphinx application instance
     """
-    logger.debug("Create dummy sphinx application.")
+    logger.debug("Create dummy sphinx application with confdir: %s", confdir)
     with tempfile.TemporaryDirectory() as temp_dir:
         outdir = pathlib.Path(temp_dir) / "_build"
-        return sphinx.application.Sphinx(
+        app = sphinx.application.Sphinx(
             srcdir=str(confdir) if confdir is not None else temp_dir,
             confdir=confdir,
             outdir=str(outdir),
@@ -58,6 +59,28 @@ def create_dummy_sphinx_app(confdir: pathlib.Path | None = None) -> sphinx.appli
             # NOTE: https://github.com/sphinx-doc/sphinx/issues/10483
             status=None,
         )
+        
+        # Debug: Log substitutions and link targets loaded from conf.py
+        if confdir is not None and hasattr(app.env, 'config'):
+            logger.debug("Sphinx app created with config: %s", app.env.config)
+            
+            # Debug: Check for substitutions in the Sphinx environment
+            if hasattr(app.env, 'substitutions'):
+                logger.debug("Substitutions in Sphinx env: %s", app.env.substitutions)
+            else:
+                logger.debug("No substitutions attribute in Sphinx env")
+                
+            # Debug: Check for link targets in the Sphinx environment
+            if hasattr(app.env, 'domains'):
+                std_domain = app.env.get_domain('std')
+                if hasattr(std_domain, 'labels'):
+                    logger.debug("Link targets in Sphinx env: %s", std_domain.labels)
+                else:
+                    logger.debug("No labels attribute in std domain")
+            else:
+                logger.debug("No domains attribute in Sphinx env")
+        
+        return app
 
 
 @contextlib.contextmanager
@@ -74,6 +97,7 @@ def load_sphinx_if_available(
         confdir = None
         if source_file_dir is not None:
             confdir = find_sphinx_confdir(source_file_dir)
+            logger.debug("Found confdir: %s for source_file_dir: %s", confdir, source_file_dir)
         
         app = create_dummy_sphinx_app(confdir)
         
@@ -83,6 +107,49 @@ def load_sphinx_if_available(
             for e in sphinx.application.builtin_extensions
             if e != "sphinx.addnodes"  # type: ignore[assignment]
         ]
+        
+        # Extract and register substitutions and link targets from conf.py
+        if app is not None and confdir is not None and hasattr(app.env, 'config'):
+            # Initialize dictionaries to store substitutions and targets
+            substitutions = {}
+            targets = {}
+            
+            # Extract substitutions from rst_prolog
+            if hasattr(app.env.config, 'rst_prolog') and app.env.config.rst_prolog:
+                logger.debug("Extracting substitutions and link targets from rst_prolog")
+                import re
+                
+                # Extract substitutions
+                sub_pattern = r'\.\. \|([^|]+)\| replace:: (.+)'
+                subs = re.findall(sub_pattern, app.env.config.rst_prolog)
+                if subs:
+                    logger.debug("Found substitutions in rst_prolog: %s", subs)
+                    for name, value in subs:
+                        substitutions[name] = value
+                        # Register individual substitution handler
+                        _docutils.register_substitution_handler(name, value)
+                
+                # Extract link targets
+                link_pattern = r'\.\. _([^:]+): (.+)'
+                links = re.findall(link_pattern, app.env.config.rst_prolog)
+                if links:
+                    logger.debug("Found link targets in rst_prolog: %s", links)
+                    for name, target in links:
+                        targets[name] = target
+            
+            # Extract substitutions from html_context
+            if hasattr(app.env.config, 'html_context') and app.env.config.html_context:
+                if 'substitutions' in app.env.config.html_context:
+                    subs = app.env.config.html_context['substitutions']
+                    logger.debug("Found substitutions in html_context: %s", subs)
+                    for name, value in subs.items():
+                        substitutions[name] = value
+                        # Register individual substitution handler
+                        _docutils.register_substitution_handler(name, value)
+            
+            # Register all substitutions and targets with docutils
+            if substitutions or targets:
+                _docutils.register_substitutions_and_targets(substitutions, targets)
 
     yield app
 
@@ -153,3 +220,11 @@ def load_sphinx_ignores(app: sphinx.application.Sphinx | None = None) -> None:  
     (directives, roles) = filter_whitelisted_directives_and_roles(directives, roles)
 
     _docutils.ignore_directives_and_roles(directives, roles)
+    
+    # Debug: Log if app is provided and has substitutions
+    if app is not None:
+        logger.debug("Sphinx app provided to load_sphinx_ignores")
+        if hasattr(app.env, 'substitutions'):
+            logger.debug("Substitutions in Sphinx env: %s", app.env.substitutions)
+        else:
+            logger.debug("No substitutions attribute in Sphinx env")

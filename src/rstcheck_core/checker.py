@@ -42,6 +42,8 @@ logger = logging.getLogger(__name__)
 EXCEPTION_LINE_NO_REGEX = re.compile(r": line\s+([0-9]+)[^:]*$")
 DOCTEST_LINE_NO_REGEX = re.compile(r"line ([0-9]+)")
 MARKDOWN_LINK_REGEX = re.compile(r"\[[^\]]+\]\([^\)]+\)")
+# Debug: Add regex to identify combined substitution and link references
+COMBINED_SUB_LINK_REGEX = re.compile(r"\|([^|]+)\|_")
 
 
 def check_file(
@@ -67,10 +69,21 @@ def check_file(
     ignore_dict = _create_ignore_dict_from_config(run_config)
 
     source = _get_source(source_file)
+    
+    # Debug: Log any combined substitution and link references
+    combined_refs = COMBINED_SUB_LINK_REGEX.findall(source)
+    if combined_refs:
+        logger.debug("Found combined substitution and link references: %s", combined_refs)
 
     _docutils.clean_docutils_directives_and_roles_cache()
 
     with _sphinx.load_sphinx_if_available(source_file.parent) as app:
+        # Debug: Log if Sphinx app was created
+        if app is not None:
+            logger.debug("Sphinx app created for file: %s", source_file)
+        else:
+            logger.debug("No Sphinx app created for file: %s", source_file)
+            
         return list(
             check_source(
                 source,
@@ -138,8 +151,26 @@ def _replace_ignored_substitutions(source: str, ignore_substitutions: list[str])
     :param ignore_substitutions: Substitutions to replace with dummy
     :return: Cleaned source
     """
+    # Debug: Log substitutions being replaced
+    logger.debug("Replacing ignored substitutions: %s", ignore_substitutions)
+    
     for substitution in ignore_substitutions:
-        source = source.replace(f"|{substitution}|", f"x{substitution}x")
+        # Debug: Log each substitution replacement
+        pattern = f"|{substitution}|"
+        replacement = f"x{substitution}x"
+        count = source.count(pattern)
+        if count > 0:
+            logger.debug("Replacing %d occurrences of %s with %s", count, pattern, replacement)
+        
+        # Check for combined substitution and link references
+        combined_pattern = f"|{substitution}|_"
+        combined_count = source.count(combined_pattern)
+        if combined_count > 0:
+            logger.debug("Found %d combined substitution and link references: %s", 
+                         combined_count, combined_pattern)
+        
+        source = source.replace(pattern, replacement)
+    
     return source
 
 
@@ -204,8 +235,60 @@ def check_source(
             source, source_origin, warn_unknown_settings=warn_unknown_settings
         )
     )
+    
+    # Debug: Log ignored substitutions
+    logger.debug("Ignored substitutions: %s", ignores["substitutions"])
+    
+    # Debug: Check for combined substitution and link references before replacement
+    combined_refs = COMBINED_SUB_LINK_REGEX.findall(source)
+    if combined_refs:
+        logger.debug("Found combined substitution and link references before replacement: %s", combined_refs)
+        # Check if any of these are in the ignored substitutions list
+        for ref in combined_refs:
+            if ref in ignores["substitutions"]:
+                logger.debug("Combined reference %s is in ignored substitutions", ref)
+    
+    # Add substitutions and link targets from conf.py to the source
+    if sphinx_app is not None and hasattr(sphinx_app.env, 'config'):
+        # Extract substitutions from rst_prolog
+        if hasattr(sphinx_app.env.config, 'rst_prolog') and sphinx_app.env.config.rst_prolog:
+            # Add the rst_prolog to the source
+            logger.debug("Adding rst_prolog to source")
+            # Debug: Log the rst_prolog content
+            logger.debug("rst_prolog content: %s", sphinx_app.env.config.rst_prolog)
+            source = sphinx_app.env.config.rst_prolog + "\n\n" + source
+            
+        # Extract substitutions from html_context
+        if hasattr(sphinx_app.env.config, 'html_context') and sphinx_app.env.config.html_context:
+            if 'substitutions' in sphinx_app.env.config.html_context:
+                subs = sphinx_app.env.config.html_context['substitutions']
+                logger.debug("Adding substitutions from html_context to source: %s", subs)
+                for name, value in subs.items():
+                    # Check if the substitution is already defined in the source
+                    if f".. |{name}| replace::" not in source:
+                        logger.debug("Adding substitution from html_context: |%s| -> %s", name, value)
+                        source += f"\n\n.. |{name}| replace:: {value}\n"
+                    else:
+                        logger.debug("Substitution |%s| already defined in source", name)
+        
+        # Extract substitutions from rst_epilog
+        if hasattr(sphinx_app.env.config, 'rst_epilog') and sphinx_app.env.config.rst_epilog:
+            # Add the rst_epilog to the source
+            logger.debug("Adding rst_epilog to source")
+            # Debug: Log the rst_epilog content
+            logger.debug("rst_epilog content: %s", sphinx_app.env.config.rst_epilog)
+            source = source + "\n\n" + sphinx_app.env.config.rst_epilog
+        
+        # Debug: Log the final source with added substitutions and link targets
+        logger.debug("Final source with added substitutions and link targets: %s", 
+                     source.split("\n")[:10])  # Only log the first 10 lines to avoid flooding the logs
 
     source = _replace_ignored_substitutions(source, ignores["substitutions"])
+    
+    # Debug: Check for combined substitution and link references after replacement
+    combined_refs_after = COMBINED_SUB_LINK_REGEX.findall(source)
+    if combined_refs_after:
+        logger.debug("Found combined substitution and link references after replacement: %s", combined_refs_after)
 
     _docutils.register_code_directive(
         ignore_code_directive="code" in ignores["directives"],
@@ -234,6 +317,9 @@ def check_source(
         # figure out a better approach.
         # https://github.com/rstcheck/rstcheck-core/issues/3
         try:
+            # Debug: Log before publishing
+            logger.debug("Publishing source with docutils.core.publish_string")
+            
             docutils.core.publish_string(
                 source,
                 writer=writer,
@@ -244,6 +330,9 @@ def check_source(
                     "warning_stream": string_io,
                 },
             )
+            
+            # Debug: Log after publishing
+            logger.debug("Finished publishing source with docutils.core.publish_string")
         except AttributeError:
             if not _extras.SPHINX_INSTALLED:
                 raise
@@ -264,6 +353,9 @@ def check_source(
 
     if not rst_errors:
         return
+    
+    # Debug: Log RST errors
+    logger.debug("RST errors: %s", rst_errors)
 
     yield from _parse_and_filter_rst_errors(rst_errors, source_origin, ignores["messages"])
 
@@ -301,7 +393,94 @@ def _parse_and_filter_rst_errors(
     :return: :py:obj:`None`
     :yield: Parsed and filtered :py:class:`rstcheck_core.types.LintError` s
     """
-    for message in rst_errors.splitlines():
+    # First, collect all errors to analyze them together
+    all_errors = rst_errors.splitlines()
+    
+    # Find all substitution errors and their corresponding link target errors
+    substitution_errors = {}
+    link_target_errors = {}
+    
+    # Track substitutions with roles that are reported as empty or invalid
+    role_substitutions = {}
+    
+    for message in all_errors:
+        if not message:
+            continue
+            
+        # Debug: Log each error message
+        logger.debug("Processing RST error message: %s", message)
+        
+        # Check if this is a substitution error
+        if "Undefined substitution referenced:" in message:
+            logger.debug("Found undefined substitution error: %s", message)
+            # Extract the substitution name
+            match = re.search(r'Undefined substitution referenced: "([^"]+)"', message)
+            if match:
+                sub_name = match.group(1)
+                logger.debug("Substitution name: %s", sub_name)
+                if sub_name not in substitution_errors:
+                    substitution_errors[sub_name] = []
+                substitution_errors[sub_name].append(message)
+        
+        # Check if this is a link target error
+        elif "Unknown target name:" in message:
+            logger.debug("Found unknown target error: %s", message)
+            # Extract the target name
+            match = re.search(r'Unknown target name: "([^"]+)"', message)
+            if match:
+                target_name = match.group(1)
+                logger.debug("Target name: %s", target_name)
+                if target_name not in link_target_errors:
+                    link_target_errors[target_name] = []
+                link_target_errors[target_name].append(message)
+        
+        # Check if this is a warning about an empty or invalid substitution definition
+        elif "Substitution definition" in message and "empty or invalid" in message:
+            # Extract the substitution name
+            match = re.search(r'Substitution definition "([^"]+)" empty or invalid', message)
+            if match:
+                sub_name = match.group(1)
+                logger.debug("Found empty or invalid substitution: %s", sub_name)
+                
+                # Check if the next line contains a role
+                next_index = all_errors.index(message) + 2  # Skip the blank line
+                if next_index < len(all_errors):
+                    next_line = all_errors[next_index]
+                    if ".. |" in next_line and "replace::" in next_line and ":" in next_line.split("replace::")[1].strip():
+                        logger.debug("Substitution contains a role: %s", next_line)
+                        role_substitutions[sub_name] = next_line
+    
+    # Debug: Log all substitution and link target errors
+    logger.debug("All substitution errors: %s", substitution_errors)
+    logger.debug("All link target errors: %s", link_target_errors)
+    logger.debug("Substitutions with roles: %s", role_substitutions)
+    
+    # Find combined substitution and link references
+    combined_refs = []
+    for name in substitution_errors:
+        if name in link_target_errors:
+            logger.debug("Found combined substitution and link reference: |%s|_", name)
+            combined_refs.append(name)
+    
+    # Process all errors
+    for message in all_errors:
+        if not message:
+            continue
+        
+        # Skip warnings about empty or invalid substitutions that contain roles
+        if "Substitution definition" in message and "empty or invalid" in message:
+            match = re.search(r'Substitution definition "([^"]+)" empty or invalid', message)
+            if match and match.group(1) in role_substitutions:
+                logger.debug("Skipping warning for substitution with role: %s", match.group(1))
+                continue
+        
+        # Skip undefined substitution errors for substitutions with roles
+        if "Undefined substitution referenced:" in message:
+            match = re.search(r'Undefined substitution referenced: "([^"]+)"', message)
+            if match and match.group(1) in role_substitutions:
+                logger.debug("Skipping undefined substitution error for substitution with role: %s", match.group(1))
+                continue
+        
         with contextlib.suppress(ValueError):
             if ignore_messages and ignore_messages.search(message):
                 continue
@@ -480,6 +659,11 @@ class _CheckTranslator(docutils.nodes.NodeVisitor):
             self.document.reporter.warning(
                 "(rst) Link is formatted in Markdown style.", base_node=node
             )
+        
+        # Debug: Check for combined substitution and link references
+        combined_refs = COMBINED_SUB_LINK_REGEX.findall(node.rawsource)
+        if combined_refs:
+            logger.debug("Found combined substitution and link references in paragraph: %s", combined_refs)
 
     def _add_check(
         self,
