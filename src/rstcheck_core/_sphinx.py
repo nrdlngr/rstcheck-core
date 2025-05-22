@@ -23,14 +23,35 @@ if _extras.SPHINX_INSTALLED:
 logger = logging.getLogger(__name__)
 
 
-def create_dummy_sphinx_app() -> sphinx.application.Sphinx:
-    """Create a dummy sphinx instance with temp dirs."""
+def find_sphinx_confdir(source_file_dir: pathlib.Path) -> pathlib.Path | None:
+    """Find directory containing conf.py file by traversing up the directory tree.
+    
+    :param source_file_dir: Directory to start searching from
+    :return: Path to directory containing conf.py or None if not found
+    """
+    current_dir = source_file_dir
+    while current_dir != current_dir.parent:  # Stop at filesystem root
+        conf_path = current_dir / "conf.py"
+        if conf_path.exists():
+            logger.debug("Found conf.py at %s", conf_path)
+            return current_dir
+        current_dir = current_dir.parent
+    
+    return None
+
+
+def create_dummy_sphinx_app(confdir: pathlib.Path | None = None) -> sphinx.application.Sphinx:
+    """Create a dummy sphinx instance with temp dirs.
+    
+    :param confdir: Path to directory containing conf.py file; defaults to :py:obj:`None`
+    :return: Sphinx application instance
+    """
     logger.debug("Create dummy sphinx application.")
     with tempfile.TemporaryDirectory() as temp_dir:
         outdir = pathlib.Path(temp_dir) / "_build"
         return sphinx.application.Sphinx(
-            srcdir=temp_dir,
-            confdir=None,
+            srcdir=str(confdir) if confdir is not None else temp_dir,
+            confdir=confdir,
             outdir=str(outdir),
             doctreedir=str(outdir),
             buildername="dummy",
@@ -40,10 +61,22 @@ def create_dummy_sphinx_app() -> sphinx.application.Sphinx:
 
 
 @contextlib.contextmanager
-def load_sphinx_if_available() -> t.Generator[sphinx.application.Sphinx | None, None, None]:
-    """Contextmanager to register Sphinx directives and roles if sphinx is available."""
+def load_sphinx_if_available(
+    source_file_dir: pathlib.Path | None = None
+) -> t.Generator[sphinx.application.Sphinx | None, None, None]:
+    """Contextmanager to register Sphinx directives and roles if sphinx is available.
+    
+    :param source_file_dir: Directory of the source file being checked; defaults to :py:obj:`None`
+    :yield: Sphinx application or None if Sphinx is not installed
+    """
+    app = None
     if _extras.SPHINX_INSTALLED:
-        create_dummy_sphinx_app()
+        confdir = None
+        if source_file_dir is not None:
+            confdir = find_sphinx_confdir(source_file_dir)
+        
+        app = create_dummy_sphinx_app(confdir)
+        
         # NOTE: Hack to prevent sphinx warnings for overwriting registered nodes; see #113
         sphinx.application.builtin_extensions = [
             e
@@ -51,7 +84,7 @@ def load_sphinx_if_available() -> t.Generator[sphinx.application.Sphinx | None, 
             if e != "sphinx.addnodes"  # type: ignore[assignment]
         ]
 
-    yield None
+    yield app
 
 
 def get_sphinx_directives_and_roles() -> tuple[list[str], list[str]]:
@@ -108,8 +141,11 @@ def filter_whitelisted_directives_and_roles(
     return (directives, roles)
 
 
-def load_sphinx_ignores() -> None:  # pragma: no cover
-    """Register Sphinx directives and roles to ignore."""
+def load_sphinx_ignores(app: sphinx.application.Sphinx | None = None) -> None:  # pragma: no cover
+    """Register Sphinx directives and roles to ignore.
+    
+    :param app: Sphinx application instance; defaults to :py:obj:`None`
+    """
     _extras.install_guard("sphinx")
     logger.debug("Load sphinx directives and roles.")
 

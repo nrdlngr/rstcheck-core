@@ -70,7 +70,7 @@ def check_file(
 
     _docutils.clean_docutils_directives_and_roles_cache()
 
-    with _sphinx.load_sphinx_if_available():
+    with _sphinx.load_sphinx_if_available(source_file.parent) as app:
         return list(
             check_source(
                 source,
@@ -78,6 +78,7 @@ def check_file(
                 ignores=ignore_dict,
                 report_level=run_config.report_level or config.DEFAULT_REPORT_LEVEL,
                 warn_unknown_settings=run_config.warn_unknown_settings or False,
+                sphinx_app=app,
             )
         )
 
@@ -164,6 +165,7 @@ def check_source(
     report_level: config.ReportLevel = config.DEFAULT_REPORT_LEVEL,
     *,
     warn_unknown_settings: bool = False,
+    sphinx_app: t.Any = None,
 ) -> types.YieldedLintError:
     """Check the given rst source for issues.
 
@@ -214,7 +216,7 @@ def check_source(
     _docutils.ignore_directives_and_roles(ignores["directives"] or [], ignores["roles"] or [])
 
     if _extras.SPHINX_INSTALLED:
-        _sphinx.load_sphinx_ignores()
+        _sphinx.load_sphinx_ignores(sphinx_app)
 
     writer = _CheckWriter(source, source_origin, ignores, report_level)
 
@@ -743,6 +745,8 @@ class CodeBlockChecker:
             ignores=self.ignores,
             report_level=self.report_level,
             warn_unknown_settings=self.warn_unknown_settings,
+            # We don't have access to the sphinx_app here, but that's okay
+            # because nested RST files will be checked with their own context
         )
 
     def check_doctest(self, source_code: str) -> types.YieldedLintError:

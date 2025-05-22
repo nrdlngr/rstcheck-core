@@ -28,7 +28,7 @@ project = "rstcheck_core"
 author = "Steven Myint <git@stevenmyint.com>"
 GH_REPO_LINK = "https://github.com/rstcheck/rstcheck-core"
 CREATION_YEAR = 2013
-CURRENT_YEAR = f"{datetime.datetime.now(tz=datetime.UTC).date().year}"
+CURRENT_YEAR = f"{datetime.datetime.now(tz=datetime.timezone.utc).date().year}"
 copyright = (  # noqa: A001
     f"{CREATION_YEAR}{('-' + CURRENT_YEAR) if CURRENT_YEAR != CREATION_YEAR else ''}, "
     f"{author} and AUTHORS"
